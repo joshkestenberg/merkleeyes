@@ -14,5 +14,5 @@ func main() {
 
 	hex := hex.EncodeToString(bytes)
 
-	fmt.Println("Your encoded transaction will be: 0x" + hex)
+	fmt.Println("Your transaction as encoded as a byte string will be: 0x" + hex)
 }
