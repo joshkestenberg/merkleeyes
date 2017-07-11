@@ -240,6 +240,7 @@ func (app *MerkleEyesApp) doTx(tree merkle.Tree, tx []byte) abci.Result {
 		tree.Set(storeKey(key), value)
 
 	case "remove":
+		// TODO: implement "key not found"
 		tree.Remove(storeKey(key))
 
 	case "cas": // Compare and Swap
@@ -267,43 +268,6 @@ func (app *MerkleEyesApp) doTx(tree merkle.Tree, tx []byte) abci.Result {
 	}
 	return abci.OK
 }
-
-/////////////////////////////////////////////
-
-//   typeByte := tx[0]
-//   tx = tx[1:]
-//   switch typeByte {
-//   case WriteSet: // Set
-//     key, n, err := wire.GetByteSlice(tx)
-//     if err != nil {
-//       return abci.ErrEncodingError.SetLog(cmn.Fmt("Error reading key: %v", err.Error()))
-//     }
-//     tx = tx[n:]
-//     value, n, err := wire.GetByteSlice(tx)
-//     if err != nil {
-//       return abci.ErrEncodingError.SetLog(cmn.Fmt("Error reading value: %v", err.Error()))
-//     }
-//     tx = tx[n:]
-//     if len(tx) != 0 {
-//       return abci.ErrEncodingError.SetLog(cmn.Fmt("Got bytes left over"))
-//     }
-//
-//     tree.Set(key, value)
-//   case WriteRem: // Remove
-//     key, n, err := wire.GetByteSlice(tx)
-//     if err != nil {
-//       return abci.ErrEncodingError.SetLog(cmn.Fmt("Error reading key: %v", err.Error()))
-//     }
-//     tx = tx[n:]
-//     if len(tx) != 0 {
-//       return abci.ErrEncodingError.SetLog(cmn.Fmt("Got bytes left over"))
-//     }
-//     tree.Remove(key)
-//   default:
-//     return abci.ErrUnknownRequest.SetLog(cmn.Fmt("Unexpected Tx type byte %X", typeByte))
-//   }
-//   return abci.OK
-// }
 
 // Commit implements abci.Application
 func (app *MerkleEyesApp) Commit() abci.Result {

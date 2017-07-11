@@ -5,7 +5,7 @@ vendor
 test.db
 
 # created in dev
-./cmd/merkleeyes/ok
+./cmd/merkleeyes/what
 
 # profiling data
 *\.test
