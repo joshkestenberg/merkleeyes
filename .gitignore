@@ -4,6 +4,9 @@ vendor
 # created in test code
 test.db
 
+# created in dev
+./cmd/merkleeyes/ok
+
 # profiling data
 *\.test
 cpu*.out
