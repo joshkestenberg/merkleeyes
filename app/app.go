@@ -56,7 +56,7 @@ type TxStruct struct {
 	Method       string `json:"method"`
 	Key          string `json:"key"`
 	Value        string `json:"value"`
-	CompareValue string `json:"comparevalue"`
+	CompareValue string `json:"compare_value"`
 	Nonce        string `json:"nonce"`
 }
 
@@ -191,12 +191,13 @@ func (app *MerkleEyesApp) doTx(tree merkle.Tree, tx []byte) abci.Result {
 
 	fmt.Println(string(tx))
 
-	txStruct := new(TxStruct)
+	var txStruct TxStruct
 	err := json.Unmarshal(tx, &txStruct)
 	if err != nil {
 		return abci.ErrEncodingError.SetLog(cmn.Fmt("Error decoding JSON: %v", err))
 	}
 
+	// []byte is the only necessary datatype going forward
 	key := []byte(txStruct.Key)
 	value := []byte(txStruct.Value)
 	compareValue := []byte(txStruct.CompareValue)
@@ -216,12 +217,14 @@ func (app *MerkleEyesApp) doTx(tree merkle.Tree, tx []byte) abci.Result {
 	// set nonce
 	tree.Set(nonceKey(nonce), []byte("found"))
 
+	// validate key
+	if len(key) == 0 {
+		return abci.ErrEncodingError.SetLog(cmn.Fmt("Key cannot be blank"))
+	}
+
 	// responses for all request methods
 	switch txStruct.Method {
 	case "get":
-		if len(key) == 0 {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Key cannot be blank"))
-		}
 		_, value, exists := tree.Get(storeKey(key))
 		if exists {
 			fmt.Println("GET", cmn.Fmt("%s", string(key)), cmn.Fmt("%s", string(value)))
@@ -231,40 +234,33 @@ func (app *MerkleEyesApp) doTx(tree merkle.Tree, tx []byte) abci.Result {
 		}
 
 	case "set":
-		if len(key) == 0 {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Key cannot be blank"))
-		}
 		if len(value) == 0 {
 			return abci.ErrEncodingError.SetLog(cmn.Fmt("Value cannot be blank"))
 		}
 		tree.Set(storeKey(key), value)
 
 	case "remove":
-		// TODO: implement "key not found"
 		tree.Remove(storeKey(key))
 
 	case "cas": // Compare and Swap
-		if len(key) == 0 {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Key cannot be blank"))
-		}
 		if len(value) == 0 {
 			return abci.ErrEncodingError.SetLog(cmn.Fmt("Value cannot be blank"))
 		}
 		if len(compareValue) == 0 {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Compare value cannot be blank"))
+			return abci.ErrEncodingError.SetLog(cmn.Fmt("compare_value cannot be blank"))
 		}
-		_, prValue, exists := tree.Get(storeKey(key))
+		_, curValue, exists := tree.Get(storeKey(key))
 		if !exists {
 			return abci.ErrBaseUnknownAddress.AppendLog(fmt.Sprintf("Cannot find key: %X", key))
 		}
-		if !bytes.Equal(prValue, compareValue) {
+		if !bytes.Equal(curValue, compareValue) {
 			return abci.ErrUnauthorized.AppendLog(fmt.Sprintf("Value was %X, not %X", value, compareValue))
 		}
 		tree.Set(storeKey(key), value)
 
 		fmt.Println("CAS-SET", cmn.Fmt("%X", key), cmn.Fmt("%s", string(compareValue)), cmn.Fmt("%s", string(value)))
 	default:
-		return abci.ErrEncodingError.SetLog(cmn.Fmt("Unknown method"))
+		return abci.ErrEncodingError.SetLog(cmn.Fmt("Unknown method %s", txStruct.Method))
 	}
 	return abci.OK
 }
