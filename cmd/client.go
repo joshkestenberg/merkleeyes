@@ -28,7 +28,7 @@ func sendTx(txStruct TxStruct) {
 		panic(err)
 	}
 
-	c := client.NewHTTP("tcp://localhost:44657", "/websocket")
+	c := client.NewHTTP("tcp://localhost:46657", "/websocket")
 	tx := types.Tx(jsonTx)
 	result, err := c.BroadcastTxCommit(tx)
 	if err != nil {
