@@ -22,9 +22,9 @@ var RootCmd = &cobra.Command{
 
 Including:
         - Start the Merkleeyes server
-	- Benchmark to check the underlying performance of the databases.
-	- Dump to list the full contents of any persistent go-merkle database.
-	`,
+  - Benchmark to check the underlying performance of the databases.
+  - Dump to list the full contents of any persistent go-merkle database.
+  - Send transactions to any persistent go-merkle database`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) (err error) {
 		level := viper.GetString(FlagLogLevel)
 		err = app.SetLogLevel(level)

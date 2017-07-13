@@ -2,9 +2,12 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
+	"strings"
 
 	abci "github.com/tendermint/abci/types"
 	"github.com/tendermint/go-wire"
@@ -51,6 +54,14 @@ type MerkleEyesApp struct {
 	height uint64
 }
 
+type TxStruct struct {
+	Method       string `json:"method"`
+	Key          string `json:"key"`
+	Value        string `json:"value"`
+	CompareValue string `json:"compare_value"`
+	Nonce        string `json:"nonce"`
+}
+
 // just make sure we really are an application, if the interface
 // ever changes in the future
 func (app *MerkleEyesApp) assertApplication() abci.Application {
@@ -90,11 +101,24 @@ func NewMerkleEyesApp(dbName string, cacheSize int) *MerkleEyesApp {
 		}
 	}
 
-	// Setup the persistent merkle tree
-	empty, _ := cmn.IsDirEmpty(path.Join(dbName, dbName+".db"))
+	// Expand the path fully
+	dbPath, err := filepath.Abs(dbName)
+	if err != nil {
+		panic(fmt.Sprintf("Invalid Database Name: %s", dbName))
+	}
 
-	// Open the db, if the db doesn't exist it will be created
-	db := dbm.NewDB(dbName, dbm.LevelDBBackendStr, dbName)
+	// Some external calls accidently add a ".db", which is now removed
+	dbPath = strings.TrimSuffix(dbPath, path.Ext(dbPath))
+
+	// Split the database name into it's components (dir, name)
+	dir := path.Dir(dbPath)
+	name := path.Base(dbPath)
+
+	// Make sure the path exists
+	empty, _ := cmn.IsDirEmpty(dbPath + ".db")
+
+	// Open database called "dir/name.db", if it doesn't exist it will be created
+	db := dbm.NewDB(name, dbm.LevelDBBackendStr, dir)
 
 	// Load Tree
 	tree := iavl.NewIAVLTree(cacheSize, db)
@@ -112,7 +136,7 @@ func NewMerkleEyesApp(dbName string, cacheSize int) *MerkleEyesApp {
 	// Load merkle state
 	eyesStateBytes := db.Get(eyesStateKey)
 	var eyesState MerkleEyesState
-	err := wire.ReadBinaryBytes(eyesStateBytes, &eyesState)
+	err = wire.ReadBinaryBytes(eyesStateBytes, &eyesState)
 	if err != nil {
 		logger.Error("error reading MerkleEyesState", "err", err)
 		// TODO: this should return an error, huh?
@@ -164,41 +188,94 @@ func (app *MerkleEyesApp) CheckTx(tx []byte) abci.Result {
 	return app.doTx(tree, tx)
 }
 
+// nonce prefix
+func nonceKey(nonce []byte) []byte {
+	return append([]byte("/nonce/"), nonce...)
+}
+
+// key prefix
+func storeKey(key []byte) []byte {
+	return append([]byte("/key/"), key...)
+}
+
+// function by which we interact with database
 func (app *MerkleEyesApp) doTx(tree merkle.Tree, tx []byte) abci.Result {
 	if len(tx) == 0 {
 		return abci.ErrEncodingError.SetLog("Tx length cannot be zero")
 	}
-	typeByte := tx[0]
-	tx = tx[1:]
-	switch typeByte {
-	case WriteSet: // Set
-		key, n, err := wire.GetByteSlice(tx)
-		if err != nil {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Error reading key: %v", err.Error()))
-		}
-		tx = tx[n:]
-		value, n, err := wire.GetByteSlice(tx)
-		if err != nil {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Error reading value: %v", err.Error()))
-		}
-		tx = tx[n:]
-		if len(tx) != 0 {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Got bytes left over"))
+
+	fmt.Println(string(tx))
+
+	var txStruct TxStruct
+	err := json.Unmarshal(tx, &txStruct)
+	if err != nil {
+		return abci.ErrEncodingError.SetLog(cmn.Fmt("Error decoding JSON: %v", err))
+	}
+
+	// []byte is the only necessary datatype going forward
+	key := []byte(txStruct.Key)
+	value := []byte(txStruct.Value)
+	compareValue := []byte(txStruct.CompareValue)
+	nonce := []byte(txStruct.Nonce)
+
+	// every tx requires a nonce
+	if len(nonce) == 0 {
+		return abci.ErrEncodingError.SetLog(cmn.Fmt("Nonce cannot be blank"))
+	}
+
+	// search for nonce
+	_, _, exists := tree.Get(nonceKey(nonce))
+	if exists {
+		return abci.ErrBadNonce.AppendLog(fmt.Sprintf("Nonce %s already exists", string(nonce)))
+	}
+
+	// set nonce
+	tree.Set(nonceKey(nonce), []byte("found"))
+
+	// validate key
+	if len(key) == 0 {
+		return abci.ErrEncodingError.SetLog(cmn.Fmt("Key cannot be blank"))
+	}
+
+	// responses for all request methods
+	switch txStruct.Method {
+	case "get":
+		_, value, exists := tree.Get(storeKey(key))
+		if exists {
+			fmt.Println("GET", cmn.Fmt("%s", string(key)), cmn.Fmt("%s", string(value)))
+			return abci.OK.SetData(value)
+		} else {
+			return abci.ErrBaseUnknownAddress.AppendLog(fmt.Sprintf("Cannot find key: %s", string(key)))
 		}
 
-		tree.Set(key, value)
-	case WriteRem: // Remove
-		key, n, err := wire.GetByteSlice(tx)
-		if err != nil {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Error reading key: %v", err.Error()))
+	case "set":
+		if len(value) == 0 {
+			return abci.ErrEncodingError.SetLog(cmn.Fmt("Value cannot be blank"))
 		}
-		tx = tx[n:]
-		if len(tx) != 0 {
-			return abci.ErrEncodingError.SetLog(cmn.Fmt("Got bytes left over"))
+		tree.Set(storeKey(key), value)
+
+	case "remove":
+		tree.Remove(storeKey(key))
+
+	case "cas": // Compare and Swap
+		if len(value) == 0 {
+			return abci.ErrEncodingError.SetLog(cmn.Fmt("Value cannot be blank"))
 		}
-		tree.Remove(key)
+		if len(compareValue) == 0 {
+			return abci.ErrEncodingError.SetLog(cmn.Fmt("compare_value cannot be blank"))
+		}
+		_, curValue, exists := tree.Get(storeKey(key))
+		if !exists {
+			return abci.ErrBaseUnknownAddress.AppendLog(fmt.Sprintf("Cannot find key: %X", key))
+		}
+		if !bytes.Equal(curValue, compareValue) {
+			return abci.ErrUnauthorized.AppendLog(fmt.Sprintf("Value was %X, not %X", value, compareValue))
+		}
+		tree.Set(storeKey(key), value)
+
+		fmt.Println("CAS-SET", cmn.Fmt("%X", key), cmn.Fmt("%s", string(compareValue)), cmn.Fmt("%s", string(value)))
 	default:
-		return abci.ErrUnknownRequest.SetLog(cmn.Fmt("Unexpected Tx type byte %X", typeByte))
+		return abci.ErrEncodingError.SetLog(cmn.Fmt("Unknown method %s", txStruct.Method))
 	}
 	return abci.OK
 }
